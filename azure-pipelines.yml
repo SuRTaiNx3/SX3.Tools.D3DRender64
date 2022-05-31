@@ -21,9 +21,10 @@ steps:
   inputs:
     restoreSolution: '$(solution)'
 
+
 - task: VSBuild@1
   inputs:
-    solution: '$(solution)'
+    solution: '**/SX3.Tools.D3DRender64.csproj'
     platform: '$(buildPlatform)'
     configuration: '$(buildConfiguration)'
 
