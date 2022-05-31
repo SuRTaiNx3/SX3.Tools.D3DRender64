@@ -2,7 +2,7 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace SX3.Tools.D3DRender
+namespace SX3.Tools.D3DRender64
 {
     public static class RuntimePolicyHelper
     {

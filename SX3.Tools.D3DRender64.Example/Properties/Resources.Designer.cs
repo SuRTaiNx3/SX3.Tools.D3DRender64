@@ -9,7 +9,7 @@
 //------------------------------------------------------------------------------
 
 
-namespace SX3.Tools.D3DRender.Example.Properties
+namespace SX3.Tools.D3DRender64.Example.Properties
 {
     /// <summary>
     ///   Eine stark typisierte Ressourcenklasse zum Suchen von lokalisierten Zeichenfolgen usw.

@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Diagnostics;
 
-namespace SX3.Tools.D3DRender
+namespace SX3.Tools.D3DRender64
 {
     public class FPSCalculator
     {

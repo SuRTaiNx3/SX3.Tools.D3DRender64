@@ -1,80 +1,37 @@
-﻿using SX3.Tools.D3DRender.Menu;
-using System;
-using SD = System.Drawing;
-using WF = System.Windows.Forms;
+﻿using System;
 using FontFactory = SharpDX.DirectWrite.Factory;
 using D2DFactory = SharpDX.Direct2D1.Factory;
 using System.Runtime.InteropServices;
 using System.Collections.Generic;
-using SX3.Tools.D3DRender.Menu.Items;
 using SharpDX.Direct2D1;
 using SharpDX;
 using SharpDX.Mathematics.Interop;
 using SharpDX.DirectWrite;
-using TextAntialiasMode = SharpDX.Direct2D1.TextAntialiasMode;
+using SharpDX.DXGI;
 
-namespace SX3.Tools.D3DRender
+namespace SX3.Tools.D3DRender64
 {
     public class UIRenderer
     {
         #region Globals
 
         // General
-        private IntPtr _hostWindowHandle = IntPtr.Zero;
-        private static UIRenderer _currentInstance = null;
+        private bool _disposing;
 
         // D3D
-        private WindowRenderTarget _device = null;
-        private D2DFactory Factory { get; set; }
-        private FontFactory FontBase { get; set; }
-        private HwndRenderTargetProperties _presentParameters;
+        private D2DFactory _d2dFactory { get; set; }
+        private FontFactory _fontFactory { get; set; }
+        private HwndRenderTargetProperties _renderTargetProperties;
         private SolidColorBrush _defaultBrush;
-
-        // FPS
-        private FPSCalculator _fpsCalculator;
 
         // Fonts
         private Dictionary<string, TextFormat> _fonts = new Dictionary<string, TextFormat>();
 
-        // Keyboard hook
-        private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
-        private LowLevelKeyboardProc _proc = hookProc;
-        private static IntPtr _hhook = IntPtr.Zero;
-
-        private const int WH_KEYBOARD_LL = 13;
-        public const int WM_KEYDOWN = 0x100;
-        public const int WM_KEYUP = 0x0101;
-
-        #endregion
-
-        #region Events
-
-        public delegate void KeyWasPressedEventHandler(object sender, int keyCode, IntPtr wParam);
-        public event KeyWasPressedEventHandler OnKeyPressed;
-
-        #endregion
-
-
-        #region DllImports
-
-        [DllImport("user32.dll")]
-        static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc callback, IntPtr hInstance, uint threadId);
-
-        [DllImport("user32.dll")]
-        static extern bool UnhookWindowsHookEx(IntPtr hInstance);
-
-        [DllImport("user32.dll")]
-        static extern IntPtr CallNextHookEx(IntPtr idHook, int nCode, int wParam, IntPtr lParam);
-
-        [DllImport("kernel32.dll")]
-        static extern IntPtr LoadLibrary(string lpFileName);
-
-        [DllImport("user32.dll")]
-        static extern IntPtr GetForegroundWindow();
-
         #endregion
 
         #region Properties
+
+        public WindowRenderTarget Device { get; set; }
 
         private bool _isInitialized = false;
         public bool IsInitialized
@@ -88,54 +45,25 @@ namespace SX3.Tools.D3DRender
             get { return _isRendering; }
         }
 
-        private int _deviceWidth;
-        public int DeviceWidth
+        private Size2 _uiSize;
+        public Size2 UISize
         {
-            get { return _deviceWidth; }
+            get { return _uiSize; }
+            set { _uiSize = value; }
         }
 
-        private int _deviceHeight;
-        public int DeviceHeight
+        public Color GetRendererBackColor()
         {
-            get { return _deviceHeight; }
-        }
-
-        private RootMenu _menu;
-        public RootMenu Menu 
-        { 
-            get { return _menu; } 
-        }
-
-
-        // Input related
-
-        private static bool _controlIsPressed = false;
-        public bool ControlIsPressed
-        {
-            get { return _controlIsPressed; }
-        }
-
-        private static bool _altIsPressed = false;
-        public bool AltIsPressed
-        {
-            get { return _altIsPressed; }
-        }
-
-        private static bool _shiftIsPressed = false;
-        public bool ShiftIsPressed
-        {
-            get { return _shiftIsPressed; }
+            return Color.Transparent;
         }
 
         #endregion
 
         #region Constructor
 
-        public UIRenderer(IntPtr hostWindowHandle)
+        public UIRenderer()
         {
-            _hostWindowHandle = hostWindowHandle;
-            _currentInstance = this;
-            _menu = new RootMenu(this);
+            _disposing = false;
         }
 
         #endregion
@@ -144,43 +72,53 @@ namespace SX3.Tools.D3DRender
 
         #region General
 
-        public void InitializeDevice(int width, int height)
+        public void InitializeDevice(IntPtr hWnd, Size2 size)
         {
-            Factory = new D2DFactory();
-            FontBase = new FontFactory();
+            _d2dFactory = new D2DFactory();
+            _fontFactory = new FontFactory();
+            _fonts = new Dictionary<string, TextFormat>();
 
-            _presentParameters = new HwndRenderTargetProperties()
+            _renderTargetProperties = new HwndRenderTargetProperties()
             {
-                Hwnd = _hostWindowHandle,
-                PixelSize = new Size2(width, height),
-                PresentOptions = PresentOptions.None,
+                Hwnd = hWnd,
+                PixelSize = size,
+                PresentOptions = PresentOptions.None
             };
 
-            _device = new WindowRenderTarget(Factory, new RenderTargetProperties(new PixelFormat(SharpDX.DXGI.Format.B8G8R8A8_UNorm, AlphaMode.Premultiplied)), _presentParameters);
-            _device.TextAntialiasMode = TextAntialiasMode.Cleartype;
-            _device.AntialiasMode = AntialiasMode.PerPrimitive;
+            Device = new WindowRenderTarget(_d2dFactory, new RenderTargetProperties(new PixelFormat(Format.B8G8R8A8_UNorm, SharpDX.Direct2D1.AlphaMode.Premultiplied)), _renderTargetProperties);
+            Device.TextAntialiasMode = SharpDX.Direct2D1.TextAntialiasMode.Cleartype;
 
-            _deviceHeight = height;
-            _deviceWidth = width;
+            UISize = size;
 
             _isInitialized = true;
             CreateResources();
-            SetHook();
+        }
+
+        public void DestroyDevice()
+        {
+            foreach (TextFormat font in _fonts.Values)
+                font.Dispose();
+
+            _fonts.Clear();
+
+            _d2dFactory.Dispose();
+            _fontFactory.Dispose();
+            Device.Dispose();
+            this.Device = null;
         }
 
         private void CreateResources()
         {
-            _fpsCalculator = new FPSCalculator();
             RegisterFont("default_font", "Museo", 12);
-            RegisterFont("default_bold_font", "Museo", 12, FontWeight.Bold);
-            RegisterFont("fps_font", "Arial", 12, FontWeight.Bold);
+            RegisterFont("default_bold_font", "Museo", 12, (int)FontWeight.Bold);
+            RegisterFont("fps_font", "Arial", 18, (int)FontWeight.Bold);
             RegisterFont("footer_font", "Museo", 10);
-            RegisterFont("title_font", "Verdana", 10, FontWeight.Bold);
+            RegisterFont("title_font", "Verdana", 10, (int)FontWeight.Bold);
             
-            _defaultBrush = new SolidColorBrush(_device, Color.Red);
+            _defaultBrush = new SolidColorBrush(Device, Color.Red);
         }
 
-        public void StartFrame(int width, int height)
+        public void StartFrame()
         {
             if (!IsInitialized)
                 throw new InvalidOperationException("InitializeDevice() must be called first!");
@@ -190,66 +128,94 @@ namespace SX3.Tools.D3DRender
 
             _isRendering = true;
 
-            _device.BeginDraw();
-            _device.Clear(new RawColor4(0,0,0,0));
-
-            _device.DrawText($"{_fpsCalculator.Update().ToString("00")} FPS", GetFontOrDefault("fps_font"), new RawRectangleF(width - 110, 10, 0, 0), _defaultBrush);
-
-            Menu.Draw(this);
+            Device.BeginDraw();
+            Clear(new Color(0,0,0,0));
         }
 
         public void EndFrame()
         {
             if (IsRendering)
             {
-                _device.EndDraw();
-                _isRendering = false;
+                try
+                {
+                    Device.EndDraw();
+                    _isRendering = false;
+                }
+                catch
+                {
+                    if (!_disposing)
+                    {
+                        Device.Dispose();
+                        Device = new WindowRenderTarget(_d2dFactory, new RenderTargetProperties(new PixelFormat(Format.B8G8R8A8_UNorm, SharpDX.Direct2D1.AlphaMode.Premultiplied)), _renderTargetProperties);
+                        Device.TextAntialiasMode = SharpDX.Direct2D1.TextAntialiasMode.Cleartype;
+                    }
+                }
             }
         }
 
-        public void Reset(int width, int height)
+        public void Clear(Color color)
+        {
+            if (Device == null)
+                throw new SharpDXException("The device was not initialized yet");
+
+            Device.Clear(color);
+        }
+
+        public void Reset(Size2 size)
         {
             if (IsInitialized && !IsRendering)
             {
-                _deviceHeight = height;
-                _deviceWidth = width;
-                _device.Resize(new Size2(width, height));
+                Device.Resize(size);
+                UISize = size;
             }
         }
 
         public void Dispose()
         {
-            foreach (var font in _fonts)
-                font.Value.Dispose();
-
-            _device.Dispose();
-
-            UnHook();
+            if (this.Device != null && !_disposing)
+            {
+                _disposing = true;
+                this.DestroyDevice();
+            }
         }
 
         #endregion
 
         #region Fonts
 
-        public void RegisterFont(string fontKey, string fontFamily, int size, FontWeight weight = FontWeight.Regular, FontStyle style = FontStyle.Normal)
+        public void RegisterFont(string fontKey, string fontFamily, int size, int weight = 400, int style = 0)
         {
             if (!IsInitialized)
                 throw new InvalidOperationException("InitializeDevice() must be called first!");
 
-            _fonts.Add(fontKey, new TextFormat(FontBase, fontFamily, weight, style, size));
+            FontWeight fontWeight = FontWeight.Regular;
+            if (Enum.IsDefined(typeof(FontWeight), weight))
+                fontWeight = (FontWeight)weight;
+
+            FontStyle fontStyle = FontStyle.Normal;
+            if (Enum.IsDefined(typeof(FontStyle), style))
+                fontStyle = (FontStyle)style;
+
+            TextFormat format = new TextFormat(_fontFactory, fontFamily, fontWeight, fontStyle, size);
+            _fonts.Add(fontKey, format);
         }
 
-        private TextFormat GetFontOrDefault(string fontKey)
+        public TextFormat GetFontOrDefault(string fontKey)
         {
             return _fonts.ContainsKey(fontKey) ? _fonts[fontKey] : _fonts["default_font"];
         }
 
         public Size2F MeasureString(string fontKey, string text)
         {
+            return MeasureString(GetFontOrDefault(fontKey), text);
+        }
+
+        public Size2F MeasureString(TextFormat format, string text)
+        {
             if (string.IsNullOrEmpty(text))
                 return new Size2F();
 
-            TextLayout layout = new TextLayout(FontBase, text, GetFontOrDefault(fontKey), DeviceWidth, DeviceHeight);
+            TextLayout layout = new TextLayout(_fontFactory, text, format, UISize.Width, UISize.Height);
             layout.ParagraphAlignment = ParagraphAlignment.Center;
 
             Size2F size = new Size2F(layout.Metrics.Width, layout.Metrics.Height);
@@ -265,20 +231,26 @@ namespace SX3.Tools.D3DRender
 
         public void DrawText(string fontKey, string text, float x, float y, Color color)
         {
-            if (string.IsNullOrEmpty(text))
-                return;
-
-            _defaultBrush.Color = color;
-            _device.DrawText(text, GetFontOrDefault(fontKey), new RectangleF(x, y, DeviceWidth, DeviceHeight), _defaultBrush);
+            DrawText(GetFontOrDefault(fontKey), text, new RectangleF(x, y, UISize.Width, UISize.Height), color);
         }
 
         public void DrawText(string fontKey, string text, RectangleF rect, Color color)
+        {
+            DrawText(GetFontOrDefault(fontKey), text, rect, color);
+        }
+
+        public void DrawText(TextFormat format, string text, float x, float y, Color color)
+        {
+            DrawText(format, text, new RectangleF(x, y, UISize.Width, UISize.Height), color);
+        }
+
+        public void DrawText(TextFormat format, string text, RectangleF rect, Color color)
         {
             if (string.IsNullOrEmpty(text))
                 return;
 
             _defaultBrush.Color = color;
-            _device.DrawText(text, GetFontOrDefault(fontKey), rect, _defaultBrush);
+            Device.DrawText(text, format, rect, _defaultBrush);
         }
 
         public void DrawShadowText(string fontKey, string text, float x, float y, Color color)
@@ -306,12 +278,12 @@ namespace SX3.Tools.D3DRender
             if (string.IsNullOrEmpty(text))
                 return;
 
-            RawMatrix3x2 oldTransform = _device.Transform;
+            RawMatrix3x2 oldTransform = Device.Transform;
 
-            _device.Transform = Matrix3x2.Rotation(angle, new Vector2(x, y));
+            Device.Transform = Matrix3x2.Rotation(angle, new Vector2(x, y));
             DrawText(fontKey, text, x, y, color);
 
-            _device.Transform = oldTransform;
+            Device.Transform = oldTransform;
         }
 
         public void DrawTextWithWrapping(string fontKey, string text, float x, float y, float width, float height, Color color)
@@ -319,12 +291,12 @@ namespace SX3.Tools.D3DRender
             if (string.IsNullOrEmpty(text))
                 return;
 
-            TextLayout layout = new TextLayout(FontBase, text, GetFontOrDefault(fontKey), width, height);
+            TextLayout layout = new TextLayout(_fontFactory, text, GetFontOrDefault(fontKey), width, height);
             layout.WordWrapping = WordWrapping.Wrap;
             layout.ParagraphAlignment = ParagraphAlignment.Near;
 
             _defaultBrush.Color = color;
-            _device.DrawTextLayout(new RawVector2(x, y), layout, _defaultBrush);
+            Device.DrawTextLayout(new RawVector2(x, y), layout, _defaultBrush);
             layout.Dispose();
         }
 
@@ -362,8 +334,26 @@ namespace SX3.Tools.D3DRender
 
         public void DrawLine(float x1, float y1, float x2, float y2, float strokeWidth, Color color)
         {
+            DrawLine(new RawVector2(x1, y1), new RawVector2(x2, y2), strokeWidth, color);
+        }
+
+        public void DrawLine(RawVector2 from, RawVector2 to, float strokeWidth, Color color)
+        {
             _defaultBrush.Color = color;
-            _device.DrawLine(new RawVector2(x1, y1), new RawVector2(x2, y2), _defaultBrush, strokeWidth);
+            Device.DrawLine(from, to, _defaultBrush, strokeWidth);
+        }
+
+        public void DrawLines(Color color, float strokeWidth, params Vector2[] points)
+        {
+            if (points.Length < 2)
+                throw new ArgumentException("There must be at least two points to connect", "points");
+            for (int i = 0; i < points.Length - 1; i++)
+                DrawLine(points[i], points[i + 1], strokeWidth, color);
+        }
+
+        public void DrawLines(Color color, params Vector2[] points)
+        {
+            this.DrawLines(color, 1f, points);
         }
 
 
@@ -372,13 +362,46 @@ namespace SX3.Tools.D3DRender
         public void DrawCircle(float centerX, float centerY, float radius, float strokeWidth, Color color)
         {
             _defaultBrush.Color = color;
-            _device.DrawEllipse(new Ellipse(new RawVector2(centerX, centerY), radius, radius), _defaultBrush, strokeWidth);
+            Device.DrawEllipse(new Ellipse(new RawVector2(centerX, centerY), radius, radius), _defaultBrush, strokeWidth);
         }
 
-        private void DrawFilledCircle(float centerX, float centerY, float radius, Color color)
+        public void DrawFilledCircle(float centerX, float centerY, float radius, Color color)
         {
             _defaultBrush.Color = color;
-            _device.FillEllipse(new Ellipse(new RawVector2(centerX, centerY), radius, radius), _defaultBrush);
+            Device.FillEllipse(new Ellipse(new RawVector2(centerX, centerY), radius, radius), _defaultBrush);
+        }
+
+
+        // Polygon
+
+        public void FillPolygon(Color color, params RawVector2[] points)
+        {
+            if (Device == null)
+                throw new SharpDXException("The device was not initialized yet");
+
+            using (PathGeometry gmtry = CreatePathGeometry(points))
+            {
+                using (SolidColorBrush brush = new SolidColorBrush(Device, color))
+                {
+                    Device.FillGeometry(gmtry, brush);
+                }
+            }
+        }
+
+        public void DrawPolygon(Color color, float strokeWidth, params Vector2[] points)
+        {
+            if (points.Length < 3)
+                throw new ArgumentException("A polygon must at least have three edges", "points");
+            
+            for (int i = 0; i < points.Length - 1; i++)
+                DrawLine(points[i], points[i + 1], strokeWidth, color);
+
+            DrawLine(points[points.Length - 1], points[0], strokeWidth, color);
+        }
+
+        public void DrawPolygon(Color color, params Vector2[] points)
+        {
+            this.DrawPolygon(color, 1f, points);
         }
 
 
@@ -387,7 +410,7 @@ namespace SX3.Tools.D3DRender
         public void DrawBox(RawRectangleF rect, float strokeWidth, Color color)
         {
             _defaultBrush.Color = color;
-            _device.DrawRectangle(rect, _defaultBrush, strokeWidth);
+            Device.DrawRectangle(rect, _defaultBrush, strokeWidth);
         }
 
         public void DrawBox(float x, float y, float w, float h, float strokeWidth, Color color)
@@ -396,7 +419,7 @@ namespace SX3.Tools.D3DRender
             h = y + h;
 
             _defaultBrush.Color = color;
-            _device.DrawRectangle(new RawRectangleF(x, y, w, h), _defaultBrush, strokeWidth);
+            Device.DrawRectangle(new RawRectangleF(x, y, w, h), _defaultBrush, strokeWidth);
         }
 
         public void DrawFilledBox(float x, float y, float w, float h, Color color)
@@ -405,13 +428,13 @@ namespace SX3.Tools.D3DRender
             h = y + h;
 
             _defaultBrush.Color = color;
-            _device.FillRectangle(new RawRectangleF(x, y, w, h), _defaultBrush);
+            Device.FillRectangle(new RawRectangleF(x, y, w, h), _defaultBrush);
         }
 
         public void DrawFilledBox(RawRectangleF rect, Color color)
         {
             _defaultBrush.Color = color;
-            _device.FillRectangle(rect, _defaultBrush);
+            Device.FillRectangle(rect, _defaultBrush);
         }
 
         public void DrawRoundedBox(float x, float y, float w, float h, float radius, Color color)
@@ -425,7 +448,7 @@ namespace SX3.Tools.D3DRender
             rectangle.Rect = new RawRectangleF(x, y, w, h);
 
             _defaultBrush.Color = color;
-            _device.DrawRoundedRectangle(rectangle, _defaultBrush);
+            Device.DrawRoundedRectangle(rectangle, _defaultBrush);
         }
 
         public void DrawFilledRoundedBox(float x, float y, float w, float h, float radius, Color color)
@@ -439,7 +462,7 @@ namespace SX3.Tools.D3DRender
             rectangle.Rect = new RawRectangleF(x, y, w, h);
 
             _defaultBrush.Color = color;
-            _device.FillRoundedRectangle(rectangle, _defaultBrush);
+            Device.FillRoundedRectangle(rectangle, _defaultBrush);
         }
 
         public void DrawBorderEdges(float x, float y, float w, float h, float strokeWidth, Color color)
@@ -501,17 +524,17 @@ namespace SX3.Tools.D3DRender
 
         public void DrawBitmap(Bitmap bitmap, float opacity)
         {
-            _device.DrawBitmap(bitmap, opacity, BitmapInterpolationMode.Linear);
+            Device.DrawBitmap(bitmap, opacity, BitmapInterpolationMode.Linear);
         }
 
         public void DrawBitmap(Bitmap bitmap, float opacity, RawRectangleF destinationRect)
         {
-            _device.DrawBitmap(bitmap, destinationRect, opacity, BitmapInterpolationMode.Linear);
+            Device.DrawBitmap(bitmap, destinationRect, opacity, BitmapInterpolationMode.Linear);
         }
 
         public void DrawBitmap(Bitmap bitmap, float opacity, RawRectangleF destinationRect, RawRectangleF sourceRectange)
         {
-            _device.DrawBitmap(bitmap, destinationRect, opacity, BitmapInterpolationMode.Linear, sourceRectange);
+            Device.DrawBitmap(bitmap, destinationRect, opacity, BitmapInterpolationMode.Linear, sourceRectange);
         }
 
         public Bitmap LoadImageFromBitmap(System.Drawing.Bitmap bitmap)
@@ -531,7 +554,7 @@ namespace SX3.Tools.D3DRender
         private Bitmap CreateBitmap(System.Drawing.Bitmap bitmap)
         {
             var sourceArea = new System.Drawing.Rectangle(0, 0, bitmap.Width, bitmap.Height);
-            var bitmapProperties = new BitmapProperties(new PixelFormat(SharpDX.DXGI.Format.R8G8B8A8_UNorm, AlphaMode.Premultiplied));
+            var bitmapProperties = new BitmapProperties(new PixelFormat(SharpDX.DXGI.Format.R8G8B8A8_UNorm, SharpDX.Direct2D1.AlphaMode.Premultiplied));
             var size = new Size2(bitmap.Width, bitmap.Height);
 
             // Transform pixels from BGRA to RGBA
@@ -560,10 +583,26 @@ namespace SX3.Tools.D3DRender
                 bitmap.UnlockBits(bitmapData);
                 tempStream.Position = 0;
 
-                return new Bitmap(_device, size, tempStream, stride, bitmapProperties);
+                return new Bitmap(Device, size, tempStream, stride, bitmapProperties);
             }
         }
 
+
+        // Misc
+
+        private PathGeometry CreatePathGeometry(params RawVector2[] points)
+        {
+            PathGeometry gmtry = new PathGeometry(_d2dFactory);
+
+            GeometrySink sink = gmtry.Open();
+            sink.SetFillMode(FillMode.Winding);
+            sink.BeginFigure(points[0], FigureBegin.Filled);
+            sink.AddLines(points);
+            sink.EndFigure(FigureEnd.Closed);
+            sink.Close();
+
+            return gmtry;
+        }
 
         #endregion
 
@@ -649,108 +688,6 @@ namespace SX3.Tools.D3DRender
                 RectangleF valueTextRect = new RectangleF(mainBoxX, mainBoxY + 2, mainBoxWidth, totalHeight);
                 DrawCenterText("default_font", valueText, valueTextRect, Color.White);
             }
-        }
-
-        public void DrawCrosshair(float centerX, float centerY, float size, float thickness, Color color, CrosshairTypeItem.Type type)
-        {
-            switch (type)
-            {
-                case CrosshairTypeItem.Type.FullCross:
-                    DrawLine(centerX - size, centerY, centerX + size, centerY, thickness, color);
-                    DrawLine(centerX, centerY - size, centerX, centerY + size, thickness, color);
-                    break;
-                case CrosshairTypeItem.Type.Cross:
-                    DrawLine(centerX - size, centerY, centerX - 3, centerY, thickness, color);
-                    DrawLine(centerX + size, centerY, centerX + 3, centerY, thickness, color);
-                    DrawLine(centerX, centerY - size, centerX, centerY - 3, thickness, color);
-                    DrawLine(centerX, centerY + size, centerX, centerY + 3, thickness, color);
-                    break;
-                case CrosshairTypeItem.Type.Circle:
-                    DrawCircle(centerX, centerY, size, 1, color);
-                    break;
-                case CrosshairTypeItem.Type.CircleAndCross:
-                    DrawLine(centerX - size, centerY, centerX + size, centerY, thickness, color);
-                    DrawLine(centerX, centerY - size, centerX, centerY + size, thickness, color);
-                    DrawCircle(centerX, centerY, size - 5, thickness, color);
-                    break;
-                case CrosshairTypeItem.Type.FilledCircle:
-                    DrawFilledCircle(centerX, centerY, size / 5, color);
-                    break;
-                case CrosshairTypeItem.Type.TiltedCross:
-                    DrawLine(centerX + size, centerY + size, centerX + 3, centerY + 3, thickness, color);
-                    DrawLine(centerX - size, centerY + size, centerX - 3, centerY + 3, thickness, color);
-                    DrawLine(centerX + size, centerY - size, centerX + 3, centerY - 3, thickness, color);
-                    DrawLine(centerX - size, centerY - size, centerX - 3, centerY - 3, thickness, color);
-                    break;
-                default:
-                    break;
-            }
-        }
-
-        #endregion
-
-        #region Input
-
-        private void SetHook()
-        {
-            IntPtr hInstance = LoadLibrary("User32");
-            _hhook = SetWindowsHookEx(WH_KEYBOARD_LL, _proc, hInstance, 0);
-        }
-
-        private void UnHook()
-        {
-            UnhookWindowsHookEx(_hhook);
-        }
-
-        public static IntPtr hookProc(int code, IntPtr wParam, IntPtr lParam)
-        {
-            int vkCode = Marshal.ReadInt32(lParam);
-
-            if (_currentInstance.OnKeyPressed != null)
-                _currentInstance.OnKeyPressed(_currentInstance, vkCode, wParam);
-
-            // Control Pressed
-            if (vkCode == WF.Keys.LControlKey.GetHashCode() && wParam == (IntPtr)WM_KEYUP)
-                _controlIsPressed = false;
-            if (vkCode == WF.Keys.LControlKey.GetHashCode() && wParam == (IntPtr)WM_KEYDOWN)
-                _controlIsPressed = true;
-
-            // ALt pressed
-            if (vkCode == WF.Keys.Alt.GetHashCode() && wParam == (IntPtr)WM_KEYUP)
-                _altIsPressed = false;
-            if (vkCode == WF.Keys.Alt.GetHashCode() && wParam == (IntPtr)WM_KEYDOWN)
-                _altIsPressed = true;
-
-            // Shift Pressed
-            if (vkCode == WF.Keys.LShiftKey.GetHashCode() && wParam == (IntPtr)WM_KEYUP)
-                _shiftIsPressed = false;
-            if (vkCode == WF.Keys.LShiftKey.GetHashCode() && wParam == (IntPtr)WM_KEYDOWN)
-                _shiftIsPressed = true;
-
-            bool ValidKeyDown = false;
-            if (vkCode == WF.Keys.Up.GetHashCode()
-                || vkCode == WF.Keys.Down.GetHashCode() || vkCode == WF.Keys.Right.GetHashCode()
-                || vkCode == WF.Keys.Left.GetHashCode() || vkCode == WF.Keys.Insert.GetHashCode()
-                || vkCode == WF.Keys.NumPad2.GetHashCode() || vkCode == WF.Keys.NumPad8.GetHashCode()
-                || vkCode == WF.Keys.NumPad5.GetHashCode() || vkCode == WF.Keys.NumPad9.GetHashCode()
-                || vkCode == WF.Keys.NumPad3.GetHashCode())
-                ValidKeyDown = true;
-
-            if (code >= 0 && wParam == (IntPtr)WM_KEYDOWN && ValidKeyDown)
-            {
-                // Hide/Show Menu
-                if (vkCode == WF.Keys.Insert.GetHashCode())
-                    _currentInstance.Menu.IsVisible = !_currentInstance.Menu.IsVisible;
-
-                if (!_currentInstance.Menu.IsVisible)
-                    return CallNextHookEx(_hhook, code, (int)wParam, lParam);
-
-                _currentInstance.Menu.ProcessKeyInput(vkCode);
-
-                return (IntPtr)1;
-            }
-            else
-                return CallNextHookEx(_hhook, code, (int)wParam, lParam);
         }
 
         #endregion
